@@ -131,14 +131,18 @@ using (var scope = app.Services.CreateScope())
         if (first is not null) { first.Role = "Admin"; await db.SaveChangesAsync(); }
     }
 }
-
-// Swagger UI (opens at root in dev)
-app.UseSwagger();
-app.UseSwaggerUI(options =>
+if (app.Environment.IsDevelopment())
 {
-    options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyBlog API v1");
-    options.RoutePrefix = string.Empty;
-});
+    // Swagger UI (opens at root in dev)
+    app.UseSwagger();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "MyBlog API v1");
+        options.RoutePrefix = string.Empty;
+    });
+}
+
+
 
 app.UseMiddleware<ErrorHandlingMiddleware>();
 app.UseMiddleware<ApiRobotsMiddleware>();
