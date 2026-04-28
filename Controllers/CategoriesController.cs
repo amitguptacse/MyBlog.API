@@ -10,8 +10,11 @@ namespace MyBlog.API.Controllers;
 public class CategoriesController(ICategoryService categoryService) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll() =>
-        Ok(await categoryService.GetAllAsync());
+    public async Task<IActionResult> GetAll()
+    {
+        Response.Headers.CacheControl = "public, max-age=300, stale-while-revalidate=3600";
+        return Ok(await categoryService.GetAllAsync());
+    }
 
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)

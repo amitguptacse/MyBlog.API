@@ -16,13 +16,18 @@ public class PostService(AppDbContext db) : IPostService
     {
         var query = db.BlogPosts
             .Where(p => includeDrafts || p.IsPublished)
-            .Where(p => search == null || p.Title.Contains(search) || p.Content.Contains(search))
+            .Where(p => search == null
+                || p.Title.Contains(search)
+                || p.Excerpt!.Contains(search)
+                || p.Tags.Any(t => t.Name.Contains(search))
+                || p.Content.Contains(search))
             .Where(p => categoryId == null || p.CategoryId == categoryId)
             .Where(p => tagId == null || p.Tags.Any(t => t.Id == tagId))
             .Include(p => p.Author)
             .Include(p => p.Category)
             .Include(p => p.Tags)
-            .OrderByDescending(p => p.CreatedAt);
+            .OrderByDescending(p => search != null && p.Title.Contains(search) ? 1 : 0)
+            .ThenByDescending(p => p.CreatedAt);
 
         var total = await query.CountAsync();
         var posts = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync();

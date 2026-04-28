@@ -36,9 +36,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // CORS
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins("http://localhost:3000")
+        policy.WithOrigins(
+                  "http://localhost:3000",
+                  "https://thegyangaagar.in",
+                  "https://www.thegyangaagar.in")
               .AllowAnyHeader()
               .AllowAnyMethod()));
+
+// Response compression (gzip + brotli)
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+});
 
 // Rate Limiting
 builder.Services.AddRateLimiter(options =>
@@ -132,6 +141,8 @@ app.UseSwaggerUI(options =>
 });
 
 app.UseMiddleware<ErrorHandlingMiddleware>();
+app.UseMiddleware<ApiRobotsMiddleware>();
+app.UseResponseCompression();
 app.UseRateLimiter();
 app.UseCors();
 app.UseHttpsRedirection();

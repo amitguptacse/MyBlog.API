@@ -24,6 +24,10 @@ public class PostsController(IPostService postService) : ControllerBase
             includeDrafts = false;
 
         var (posts, total) = await postService.GetAllAsync(page, pageSize, search, categoryId, tagId, includeDrafts);
+
+        if (!includeDrafts)
+            Response.Headers.CacheControl = "public, max-age=60, stale-while-revalidate=300";
+
         return Ok(new { data = posts, total, page, pageSize });
     }
 
@@ -39,7 +43,16 @@ public class PostsController(IPostService postService) : ControllerBase
     public async Task<IActionResult> GetBySlug(string slug)
     {
         var post = await postService.GetBySlugAsync(slug);
-        return post is null ? NotFound() : Ok(post);
+        if (post is null) return NotFound();
+
+        var etag = $"\"{post.UpdatedAt:yyyyMMddHHmmss}\"";
+        Response.Headers.ETag = etag;
+        Response.Headers.CacheControl = "public, max-age=60, stale-while-revalidate=300";
+
+        if (Request.Headers.IfNoneMatch == etag)
+            return StatusCode(304);
+
+        return Ok(post);
     }
 
     [Authorize]
