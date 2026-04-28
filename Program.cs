@@ -111,6 +111,18 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
+// Promote the first registered user to Admin if no Admin exists yet
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<MyBlog.API.Data.AppDbContext>();
+    await db.Database.EnsureCreatedAsync();
+    if (!db.Users.Any(u => u.Role == "Admin"))
+    {
+        var first = db.Users.OrderBy(u => u.Id).FirstOrDefault();
+        if (first is not null) { first.Role = "Admin"; await db.SaveChangesAsync(); }
+    }
+}
+
 // Swagger UI (opens at root in dev)
 app.UseSwagger();
 app.UseSwaggerUI(options =>
