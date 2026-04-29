@@ -14,7 +14,11 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Database
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"),
+        sqlOptions => sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorNumbersToAdd: null)));
 
 // JWT Authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -124,11 +128,18 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<MyBlog.API.Data.AppDbContext>();
-    await db.Database.EnsureCreatedAsync();
-    if (!db.Users.Any(u => u.Role == "Admin"))
+    try
     {
-        var first = db.Users.OrderBy(u => u.Id).FirstOrDefault();
-        if (first is not null) { first.Role = "Admin"; await db.SaveChangesAsync(); }
+        await db.Database.EnsureCreatedAsync();
+        if (!db.Users.Any(u => u.Role == "Admin"))
+        {
+            var first = db.Users.OrderBy(u => u.Id).FirstOrDefault();
+            if (first is not null) { first.Role = "Admin"; await db.SaveChangesAsync(); }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"Startup DB check failed: {ex.Message}");
     }
 }
 if (app.Environment.IsDevelopment())
