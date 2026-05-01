@@ -140,6 +140,7 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
 
     private AuthResponseDto BuildResponse(User user) => new()
     {
+        Id = user.Id,
         AccessToken = jwt.GenerateAccessToken(user),
         RefreshToken = user.RefreshToken ?? string.Empty,
         Email = user.Email,

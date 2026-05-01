@@ -1,0 +1,1380 @@
+# MyBlog.API — Interview Q&A (OOP + .NET Concepts)
+
+> This file covers every OOP concept and .NET pattern implemented in the project,
+> with analogies and exact code references so you can explain confidently.
+
+---
+
+## TABLE OF CONTENTS
+
+1. [OOP — The Four Pillars](#1-oop--the-four-pillars)
+2. [SOLID Principles](#2-solid-principles)
+3. [Design Patterns](#3-design-patterns)
+4. [Dependency Injection](#4-dependency-injection)
+5. [Entity Framework Core & ORM](#5-entity-framework-core--orm)
+6. [Authentication & Authorization (JWT)](#6-authentication--authorization-jwt)
+7. [Middleware](#7-middleware)
+8. [REST API & Controllers](#8-rest-api--controllers)
+9. [DTOs & Data Mapping](#9-dtos--data-mapping)
+10. [Security Practices](#10-security-practices)
+11. [Performance & Caching](#11-performance--caching)
+12. [Error Handling](#12-error-handling)
+13. [General .NET / C# Questions](#13-general-net--c-questions)
+
+---
+
+## 1. OOP — THE FOUR PILLARS
+
+---
+
+### Q1. What is Encapsulation and where have you used it in your project?
+
+**Answer:**
+
+Encapsulation means hiding internal details and exposing only what is necessary — like a capsule that hides the medicine inside.
+
+In my project I use encapsulation at multiple levels:
+
+**1. JwtHelper class** (`Helpers/JwtHelper.cs`) — All the logic for creating JWT tokens (signing key, algorithm, expiry, claims) is hidden inside `JwtHelper`. A controller or service simply calls `jwt.GenerateAccessToken(user)` without knowing anything about HMAC-SHA256 or `SecurityTokenDescriptor`.
+
+```
+Think of it like a vending machine — you press a button (call the method),
+you get the drink (the token). You don't see the internal mechanism.
+```
+
+**2. Service classes** — `PostService` encapsulates all post-related logic: slug generation, HTML sanitization, tag resolution, authorization checks. The `PostsController` just calls `postService.CreateAsync(dto, userId, isAdmin)` and trusts the result.
+
+**3. Password hashing** — In `AuthService`, BCrypt hashing is encapsulated inside `RegisterAsync()`. The caller never deals with salt rounds or hash comparison — that is all hidden inside the service.
+
+**4. Models with auto-properties** — Entity models expose their data through C# auto-properties, not raw fields. This keeps the internal representation changeable without breaking the API.
+
+---
+
+### Q2. What is Abstraction and where have you used it?
+
+**Answer:**
+
+Abstraction means showing only the relevant features and hiding the complexity — like a car's steering wheel. You turn it; you don't know the rack-and-pinion mechanism inside.
+
+In my project, abstraction is implemented through **interfaces**:
+
+- `IAuthService`, `IPostService`, `ICategoryService`, `ITagService`, `ICommentService`, `INewsletterService`, `IEmailService`, `IMediaService`
+
+Each interface is a contract that says "here is what you CAN do" without telling you HOW it is done.
+
+**Real example from the project:**
+
+`IEmailService` has one method: `SendAsync(to, subject, htmlBody)`.
+
+The `ContactService` and `AuthService` call `emailService.SendAsync(...)` without knowing whether emails are sent via SendGrid, SMTP, or any other provider. Today it is SendGrid — tomorrow it can be changed to MailKit by just changing the implementation class, and nothing else in the codebase breaks.
+
+```
+Abstraction is the menu at a restaurant — it tells you what dishes are available.
+The kitchen (implementation) can change recipes without updating the menu.
+```
+
+---
+
+### Q3. What is Inheritance and where have you used it?
+
+**Answer:**
+
+Inheritance is when a child class gets the properties and behaviors of a parent class — like a son inheriting traits from his father.
+
+In my project I use inheritance in two forms:
+
+**1. Interface implementation (contract inheritance):**
+Every service class inherits the contract of its interface:
+```
+AuthService : IAuthService
+PostService : IPostService
+MediaService : IMediaService
+```
+This means `AuthService` MUST provide every method defined in `IAuthService` — `RegisterAsync`, `LoginAsync`, `RefreshTokenAsync`, etc.
+
+**2. Framework class inheritance:**
+- All controllers inherit from `ControllerBase` (provided by ASP.NET Core). This gives them access to `Ok()`, `BadRequest()`, `Unauthorized()`, `User` (claims principal), `Request`, `Response`, etc. without writing that code ourselves.
+
+```csharp
+public class PostsController : ControllerBase
+public class AuthController : ControllerBase
+```
+
+**3. Middleware base behavior:**
+`ErrorHandlingMiddleware` and `ApiRobotsMiddleware` follow the convention of ASP.NET Core middleware by receiving a `RequestDelegate next` — they inherit the pipeline chaining behavior from the framework's design contract.
+
+```
+Think of ControllerBase as a parent company that gives every department
+(controller) common tools like a phone, computer, and email account.
+```
+
+---
+
+### Q4. What is Polymorphism and where have you used it?
+
+**Answer:**
+
+Polymorphism means "many forms" — the same interface or method name can behave differently depending on the actual object. Like the word "run" — a person runs, a program runs, water runs — same word, different behavior.
+
+In my project:
+
+**1. Interface polymorphism (runtime polymorphism):**
+`IEmailService` is injected into both `AuthService` and `ContactController`. Both call `emailService.SendAsync(...)`. If tomorrow I create a `MailKitEmailService : IEmailService`, both callers automatically use the new implementation — no change needed in callers.
+
+```csharp
+// In AuthService — sends password reset email
+await emailService.SendAsync(user.Email, "Reset Password", htmlBody);
+
+// In ContactController — sends contact form notification
+await emailService.SendAsync(adminEmail, "New Contact Message", htmlBody);
+```
+
+Same method call, potentially different behavior based on which implementation is registered.
+
+**2. Method behavior on the same type through different inputs:**
+`PostService.GetAllAsync()` behaves differently based on parameters:
+- Pass `includeDrafts: true` → returns all posts (admin view)
+- Pass `includeDrafts: false` → returns only published posts (public view)
+- Pass `search: "dotnet"` → filters by keyword
+- Pass `categoryId: 3` → filters by category
+
+Same method, different result — that is polymorphism through parameters.
+
+**3. Action method polymorphism in controllers:**
+`PostsController` has both `GetById(int id)` and `GetBySlug(string slug)` — two GET routes resolved polymorphically by the router based on the URL pattern.
+
+---
+
+## 2. SOLID PRINCIPLES
+
+---
+
+### Q5. Explain SOLID principles with examples from your project.
+
+**Answer:**
+
+---
+
+**S — Single Responsibility Principle (SRP)**
+*A class should have only one reason to change.*
+
+In my project every class has one job:
+- `JwtHelper` — only generates tokens. Nothing else.
+- `PostService` — only handles post business logic.
+- `ErrorHandlingMiddleware` — only catches exceptions and formats error responses.
+- `ApiRobotsMiddleware` — only adds the `X-Robots-Tag` header.
+
+If the token format changes, I change `JwtHelper`. If post logic changes, I change `PostService`. They don't interfere with each other.
+
+```
+Like a chef who only cooks, a waiter who only serves, and a cashier who only bills.
+Each has one job. When the billing system changes, only the cashier is affected.
+```
+
+---
+
+**O — Open/Closed Principle (OCP)**
+*Open for extension, closed for modification.*
+
+My `IEmailService` interface is the perfect example. The interface is closed (I never modify it). But I can extend behavior by creating a new class:
+- Today: `SendGridEmailService : IEmailService`
+- Tomorrow: `MailKitEmailService : IEmailService`
+
+I register the new one in `Program.cs` and all callers automatically use it. No existing code is modified.
+
+---
+
+**L — Liskov Substitution Principle (LSP)**
+*A subclass should be substitutable for its parent without breaking the system.*
+
+My `SendGridEmailService` substitutes `IEmailService` perfectly. Wherever `IEmailService` is injected — `AuthService`, `ContactController` — the `SendGridEmailService` object can be dropped in and it behaves correctly (sends emails as expected).
+
+---
+
+**I — Interface Segregation Principle (ISP)**
+*Don't force a class to implement methods it doesn't need. Prefer smaller, focused interfaces.*
+
+I have separate, focused interfaces instead of one giant `IBlogService`:
+- `IPostService` — only post operations
+- `ICategoryService` — only category operations
+- `ITagService` — only tag operations
+- `ICommentService` — only comment operations
+
+`TagsController` only depends on `ITagService`. It doesn't get forced to deal with post methods or comment methods.
+
+---
+
+**D — Dependency Inversion Principle (DIP)**
+*High-level modules should not depend on low-level modules. Both should depend on abstractions.*
+
+`PostsController` (high-level) depends on `IPostService` (abstraction), NOT on `PostService` (low-level). The actual `PostService` class is registered in `Program.cs` and injected by the DI container.
+
+```csharp
+// Controller depends on interface, not concrete class
+public PostsController(IPostService postService)
+
+// Program.cs wires the concrete class
+builder.Services.AddScoped<IPostService, PostService>();
+```
+
+---
+
+## 3. DESIGN PATTERNS
+
+---
+
+### Q6. What is the Service Layer Pattern and how did you implement it?
+
+**Answer:**
+
+The Service Layer pattern puts all business logic in a separate "service" layer between the controller and the database. Controllers become thin — they only handle HTTP concerns (parsing requests, returning responses). All real logic lives in services.
+
+**In my project:**
+```
+Request → PostsController → IPostService → AppDbContext → SQL Server
+```
+
+`PostsController.CreatePost()` does this:
+1. Extract user ID from JWT claims
+2. Call `postService.CreateAsync(dto, userId, isAdmin)`
+3. Return `Created(result)`
+
+The controller does NOT know about slugs, tags, or HTML sanitization. All of that is in `PostService`.
+
+```
+Like a restaurant: the waiter (controller) takes your order and brings food.
+The chef (service) decides the recipe, handles ingredients, and cooks.
+The waiter doesn't cook; the chef doesn't talk to customers.
+```
+
+**Why this matters in interviews:**
+- Easier to unit test services independently
+- Business logic is reusable (multiple controllers can call same service)
+- Controllers stay clean and simple
+
+---
+
+### Q7. What is the Repository Pattern and did you use it?
+
+**Answer:**
+
+The Repository Pattern abstracts data access behind an interface so your business logic doesn't directly talk to the database.
+
+**In my project I use an implicit repository pattern through Entity Framework Core.**
+
+Instead of a formal `IPostRepository`, my `PostService` directly uses `AppDbContext` (which is EF Core's `DbContext`). EF Core's `DbSet<T>` itself acts as a repository — it provides `Add()`, `Remove()`, `FindAsync()`, `Where()`, etc.
+
+```csharp
+// PostService uses DbContext directly — EF acts as the repository
+var post = await db.BlogPosts
+    .Include(p => p.Author)
+    .Include(p => p.Category)
+    .FirstOrDefaultAsync(p => p.Slug == slug);
+```
+
+**Why I chose this approach:**
+For a project of this size, adding a full repository layer on top of EF Core adds boilerplate without real benefit, because EF Core already provides testable, abstracted data access. For larger enterprise applications with multiple databases or complex query logic, I would add a formal repository layer.
+
+---
+
+### Q8. What is the DTO Pattern and why did you use it?
+
+**Answer:**
+
+DTO stands for Data Transfer Object. It is a simple class used to carry data between layers, specifically between the API and the client, without exposing database entities directly.
+
+**Why not return the entity (model) directly?**
+
+```
+Imagine your User entity has a PasswordHash field.
+If you return the entity directly, the client sees the password hash.
+That is a security disaster.
+```
+
+In my project, `User` entity has `PasswordHash` and `RefreshToken` — sensitive fields. The client never sees them because I return `UserDto` which only has `Id`, `UserName`, and `Email`.
+
+**DTOs I created:**
+- `CreatePostDto` — what the client sends to create a post
+- `UpdatePostDto` — what the client sends to update (partial fields)
+- `PostResponseDto` — what the API sends back (never the raw BlogPost entity)
+- `LoginDto`, `RegisterDto`, `AuthResponseDto` — for auth flows
+
+**Mapping example (PostService):**
+```csharp
+private static PostResponseDto Map(BlogPost p) => new()
+{
+    Id = p.Id,
+    Title = p.Title,
+    Slug = p.Slug,
+    AuthorName = p.Author?.UserName ?? "Unknown",
+    // PasswordHash never appears here
+};
+```
+
+```
+DTO is like a gift box — you wrap only what you want to give.
+The full inventory (entity) stays in the warehouse (database).
+```
+
+---
+
+### Q9. What is the Factory Pattern and where did you use it?
+
+**Answer:**
+
+The Factory Pattern provides a way to create objects without exposing creation logic to the caller.
+
+In my project, `JwtHelper` acts as a token factory:
+
+```csharp
+public string GenerateAccessToken(User user)  // Creates access token
+public string GenerateRefreshToken()           // Creates refresh token
+```
+
+`AuthService` calls `jwt.GenerateAccessToken(user)` and gets a ready token. It doesn't know about `JwtSecurityTokenHandler`, `SigningCredentials`, `SecurityTokenDescriptor`, or any of the JWT creation complexity. That is all encapsulated inside `JwtHelper`.
+
+```
+Like a car factory — you order a car (call GenerateAccessToken),
+the factory builds it with all parts. You don't weld anything yourself.
+```
+
+---
+
+### Q10. What is the Strategy Pattern and where did you use it?
+
+**Answer:**
+
+The Strategy Pattern defines a family of algorithms, encapsulates each one, and makes them interchangeable.
+
+In my project, `IEmailService` is the strategy interface:
+
+- **Strategy**: `SendAsync(to, subject, body)`
+- **Concrete Strategy 1**: `EmailService` (uses SendGrid API)
+- **Future Strategy 2**: Could be `SmtpEmailService`, `MailKitEmailService`, etc.
+
+The "context" classes (`AuthService`, `ContactController`) hold a reference to `IEmailService` and call `SendAsync()` without caring which strategy (provider) is active.
+
+```
+Like navigation apps: the "get directions" feature (interface) works the same.
+Internally it might use Google Maps, Apple Maps, or Bing — different strategies,
+same interface. You switch strategies in settings without rewriting the UI.
+```
+
+---
+
+## 4. DEPENDENCY INJECTION
+
+---
+
+### Q11. What is Dependency Injection and how does your project use it?
+
+**Answer:**
+
+Dependency Injection (DI) is when a class gets its dependencies from outside instead of creating them itself. The DI container manages object creation and lifetime.
+
+```
+Without DI: You go to the grocery store yourself to get ingredients.
+With DI: Someone else shops and delivers the ingredients to your kitchen.
+Your kitchen (class) doesn't care who shops — it just uses the ingredients.
+```
+
+**In my project — Registration in `Program.cs`:**
+```csharp
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IPostService, PostService>();
+builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IMediaService, MediaService>();
+// DbContext
+builder.Services.AddDbContext<AppDbContext>(options => ...);
+// JwtHelper
+builder.Services.AddSingleton<JwtHelper>();
+```
+
+**Constructor injection in services:**
+```csharp
+public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : IAuthService
+{
+    // db, jwt, email are injected — AuthService never calls 'new DbContext()'
+}
+```
+
+**Constructor injection in controllers:**
+```csharp
+public PostsController(IPostService postService)
+```
+
+**Benefits achieved in this project:**
+1. **Testability** — Mock `IPostService` in tests without touching the database
+2. **Loose coupling** — `PostsController` doesn't know about `PostService` internals
+3. **Lifetime management** — DI handles creation/disposal of DbContext per request
+
+---
+
+### Q12. What are the DI lifetimes and which did you use?
+
+**Answer:**
+
+There are three lifetimes in ASP.NET Core DI:
+
+| Lifetime | Created | Disposed | Registered with |
+|----------|---------|----------|-----------------|
+| Singleton | Once for app lifetime | When app stops | `AddSingleton` |
+| Scoped | Once per HTTP request | After request ends | `AddScoped` |
+| Transient | Every time it is requested | After use | `AddTransient` |
+
+**In my project:**
+
+- **`AddScoped`** — `AppDbContext`, `IAuthService`, `IPostService`, `ICommentService`, etc.
+  - Why? Each HTTP request needs its own database connection. If two users hit the API at the same time, they should not share the same DbContext (that would cause threading issues).
+
+- **`AddSingleton`** — `JwtHelper`
+  - Why? JwtHelper only reads configuration (signing key, expiry). It has no state. Creating it once and reusing it for the app lifetime is safe and efficient.
+  - *Analogy: A dictionary — everyone uses the same one. You don't print a new dictionary for every question.*
+
+```
+Scoped DbContext is like a fresh plate for each customer at a restaurant.
+Singleton JwtHelper is like the restaurant's address — same for everyone, always.
+```
+
+---
+
+## 5. ENTITY FRAMEWORK CORE & ORM
+
+---
+
+### Q13. What is Entity Framework Core and how did you use it?
+
+**Answer:**
+
+Entity Framework Core (EF Core) is an Object-Relational Mapper (ORM). It lets you work with database tables as C# classes and LINQ queries instead of writing raw SQL.
+
+```
+EF Core translates C# LINQ queries → SQL queries
+and SQL results → C# objects.
+
+Like a language translator — you speak C#, the database speaks SQL.
+EF Core translates in both directions.
+```
+
+**In my project (`Data/AppDbContext.cs`):**
+```csharp
+public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+{
+    public DbSet<User> Users { get; set; }
+    public DbSet<BlogPost> BlogPosts { get; set; }
+    public DbSet<Category> Categories { get; set; }
+    public DbSet<Tag> Tags { get; set; }
+    public DbSet<Comment> Comments { get; set; }
+    public DbSet<Media> Media { get; set; }
+    public DbSet<Newsletter> Newsletters { get; set; }
+    public DbSet<ContactMessage> ContactMessages { get; set; }
+}
+```
+
+**Example LINQ query in PostService:**
+```csharp
+var posts = await db.BlogPosts
+    .Where(p => p.IsPublished)
+    .Include(p => p.Author)      // JOIN Users table
+    .Include(p => p.Category)    // JOIN Categories table
+    .Include(p => p.Tags)        // JOIN Tags table (many-to-many)
+    .OrderByDescending(p => p.CreatedAt)
+    .Skip((page - 1) * pageSize)
+    .Take(pageSize)
+    .ToListAsync();
+```
+EF Core converts this to a single SQL query with JOINs, ORDER BY, and pagination — no raw SQL written.
+
+---
+
+### Q14. What is the N+1 problem and how did you solve it?
+
+**Answer:**
+
+The N+1 problem happens when you load a list of items (1 query) and then for each item you make an additional query to load related data (N queries). For 100 posts that means 101 database round-trips — very slow.
+
+```
+Imagine you have 100 students. Instead of asking the teacher
+"give me the grade of all 100 students at once" (1 query),
+you ask "give me the grade of student 1... student 2... student 3..."
+(100 separate questions). That is N+1.
+```
+
+**How I solved it in my project — Eager Loading with `.Include()`:**
+
+```csharp
+var posts = await db.BlogPosts
+    .Include(p => p.Author)    // Load author in the SAME query
+    .Include(p => p.Category)  // Load category in the SAME query
+    .Include(p => p.Tags)      // Load tags in the SAME query
+    .ToListAsync();
+```
+
+EF Core generates a single SQL with JOINs instead of separate queries per post. This is called **eager loading**.
+
+---
+
+### Q15. What is database connection resilience and why did you implement it?
+
+**Answer:**
+
+Cloud databases (like Azure SQL) sometimes experience transient errors — short-lived failures due to network hiccups, server restarts, or throttling. Without resilience, a single transient error crashes your app.
+
+**In my project (`Program.cs`):**
+```csharp
+options.UseSqlServer(connectionString, sqlOptions =>
+    sqlOptions.EnableRetryOnFailure(
+        maxRetryCount: 5,
+        maxRetryDelay: TimeSpan.FromSeconds(10),
+        errorNumbersToAdd: null));
+```
+
+**What this does:**
+- If Azure SQL returns a transient error (like error 40613 — database not available), EF Core automatically retries up to 5 times.
+- It waits up to 10 seconds between retries.
+- If all 5 retries fail, it throws the exception and the middleware returns a 500 error.
+
+```
+Like a phone call that disconnects: instead of giving up immediately,
+you redial automatically up to 5 times before accepting the call failed.
+```
+
+---
+
+### Q16. What are EF Core Migrations and why are they important?
+
+**Answer:**
+
+Migrations are like version control for your database schema. Every change to your C# models that affects the database is captured as a migration file that can be applied or rolled back.
+
+**In my project:**
+- `Migrations/InitialCreate` — Created all initial tables (Users, BlogPosts, Categories, Tags, Comments, Media, Newsletters)
+- `Migrations/messagesTable` — Added `ContactMessages` table later
+
+**Workflow:**
+1. Change a C# model (e.g., add a column to `BlogPost`)
+2. Run `dotnet ef migrations add AddNewColumn`
+3. EF generates a migration file with `Up()` (apply) and `Down()` (rollback) methods
+4. Run `dotnet ef database update` to apply to the actual database
+
+```
+Migrations are like Git commits for the database.
+Each migration is a checkpoint — you can move forward or roll back.
+Without migrations, every database change would be manual SQL scripts
+that are error-prone and hard to track.
+```
+
+---
+
+## 6. AUTHENTICATION & AUTHORIZATION (JWT)
+
+---
+
+### Q17. What is JWT and how did you implement it?
+
+**Answer:**
+
+JWT (JSON Web Token) is a compact, self-contained token for transmitting information between parties. It has three parts: Header, Payload, Signature — separated by dots.
+
+```
+JWT is like a government ID card:
+- Header: type of card (JWT, algorithm)
+- Payload: your info (name, role, expiry)
+- Signature: the stamp proving it's genuine (signed with a secret key)
+
+Anyone can read the ID card (decode), but only the government (server)
+can issue/verify it (has the secret key).
+```
+
+**In my project — Token Generation (`Helpers/JwtHelper.cs`):**
+```csharp
+var claims = new[]
+{
+    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+    new Claim(ClaimTypes.Email, user.Email),
+    new Claim(ClaimTypes.Role, user.Role)
+};
+
+var token = new JwtSecurityToken(
+    issuer: _config["Jwt:Issuer"],
+    audience: _config["Jwt:Audience"],
+    claims: claims,
+    expires: DateTime.UtcNow.AddMinutes(15),   // Short-lived
+    signingCredentials: credentials
+);
+```
+
+**Token strategy:**
+- **Access Token**: 15-minute expiry (short-lived for security)
+- **Refresh Token**: 7-day expiry, stored in the database (long-lived, used to get new access tokens)
+
+**Why two tokens?**
+If an access token is stolen, it expires in 15 minutes. The attacker can't use it for long. The refresh token is stored server-side, so we can revoke it (logout) even if someone has it.
+
+---
+
+### Q18. What is Role-Based Authorization and how did you implement it?
+
+**Answer:**
+
+Role-Based Authorization restricts what actions a user can perform based on their assigned role.
+
+**In my project — Two roles:**
+- `"Admin"` — Can approve comments, delete any post, manage categories/tags, view all media
+- `"User"` — Can create posts, upload images, post comments (pending approval)
+
+**Implementation:**
+```csharp
+// Only Admin can access
+[Authorize(Roles = "Admin")]
+[HttpGet("pending")]
+public async Task<IActionResult> GetPendingComments()
+
+// Any authenticated user can access
+[Authorize]
+[HttpPost]
+public async Task<IActionResult> CreatePost(CreatePostDto dto)
+
+// Anyone (even anonymous) can access
+[HttpGet("{slug}")]
+public async Task<IActionResult> GetBySlug(string slug)
+```
+
+**How roles are embedded in JWT:**
+```csharp
+new Claim(ClaimTypes.Role, user.Role)  // "Admin" or "User"
+```
+
+ASP.NET Core reads the role from the JWT claim automatically.
+
+**Admin promotion logic (`Program.cs`):**
+```csharp
+// If no admin exists in DB, promote the first registered user to Admin
+var firstUser = await db.Users.OrderBy(u => u.Id).FirstOrDefaultAsync();
+if (firstUser != null && !await db.Users.AnyAsync(u => u.Role == "Admin"))
+{
+    firstUser.Role = "Admin";
+    await db.SaveChangesAsync();
+}
+```
+
+---
+
+## 7. MIDDLEWARE
+
+---
+
+### Q19. What is Middleware in ASP.NET Core and what middleware did you build?
+
+**Answer:**
+
+Middleware is software assembled into a pipeline to handle requests and responses. Each middleware component can:
+1. Do work before the next component (pre-processing)
+2. Call the next component in the pipeline
+3. Do work after the next component (post-processing)
+
+```
+Middleware is like an assembly line in a factory:
+Station 1 (ErrorHandling) → Station 2 (Robots) → Station 3 (Auth) → Controller
+Each station does its job and passes the product to the next one.
+If a station rejects the product (401 Unauthorized), it stops the line.
+```
+
+**I built two custom middleware classes:**
+
+---
+
+**1. ErrorHandlingMiddleware**
+
+Catches ALL unhandled exceptions from anywhere in the pipeline and returns a consistent JSON error response instead of a crash or HTML error page.
+
+```csharp
+public async Task InvokeAsync(HttpContext context)
+{
+    try
+    {
+        await next(context);  // Call the rest of the pipeline
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        context.Response.StatusCode = 401;
+        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Unhandled exception");
+        context.Response.StatusCode = 500;
+        await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred." });
+    }
+}
+```
+
+Without this, ASP.NET Core would return an HTML error page — useless for a JSON API client.
+
+---
+
+**2. ApiRobotsMiddleware**
+
+Adds the `X-Robots-Tag: noindex, nofollow` HTTP header to all `/api/*` responses.
+
+```csharp
+public async Task InvokeAsync(HttpContext context)
+{
+    if (context.Request.Path.StartsWithSegments("/api"))
+        context.Response.Headers["X-Robots-Tag"] = "noindex, nofollow";
+    await next(context);
+}
+```
+
+**Why?** API endpoints return raw JSON — not human-readable pages. We don't want Google to index `https://mysite.com/api/posts?page=1&search=test`. This header tells search engine crawlers to ignore API routes.
+
+---
+
+### Q20. Why does middleware order matter?
+
+**Answer:**
+
+In ASP.NET Core, middleware executes in the ORDER it is registered. The wrong order can cause security holes or incorrect behavior.
+
+**My middleware order:**
+```csharp
+app.UseMiddleware<ErrorHandlingMiddleware>();  // 1st — must catch all errors
+app.UseMiddleware<ApiRobotsMiddleware>();       // 2nd — add headers early
+app.UseResponseCompression();                  // 3rd — compress before anything else
+app.UseRateLimiter();                          // 4th — reject excess requests early
+app.UseCors();                                 // 5th — handle cross-origin before auth
+app.UseHttpsRedirection();                     // 6th — redirect HTTP to HTTPS
+app.UseAuthentication();                       // 7th — identify the user
+app.UseAuthorization();                        // 8th — check permissions
+app.MapControllers();                          // Last — route to controller actions
+```
+
+**Why ErrorHandling must be FIRST?**
+It wraps the entire pipeline. If it were registered AFTER authentication, an exception in the auth middleware would not be caught. By being first, it catches everything downstream.
+
+**Why Authentication must come BEFORE Authorization?**
+You can't check permissions (authorization) until you know WHO the user is (authentication). Wrong order = every request treated as anonymous.
+
+```
+Security checkpoint analogy:
+First you show your ID (Authentication — who are you?),
+then the guard checks the list (Authorization — are you allowed in?).
+If you authorize before authenticating, the guard never sees the ID.
+```
+
+---
+
+## 8. REST API & CONTROLLERS
+
+---
+
+### Q21. How did you design your REST API endpoints?
+
+**Answer:**
+
+I followed RESTful conventions — using HTTP verbs and resource-based URLs.
+
+**Example — Posts resource:**
+```
+GET    /api/posts              → List all posts (with pagination, filters)
+GET    /api/posts/{slug}       → Get one post by slug (public)
+GET    /api/posts/id/{id}      → Get one post by ID (authorized)
+POST   /api/posts              → Create a new post
+PUT    /api/posts/{id}         → Update a post fully
+DELETE /api/posts/{id}         → Delete a post
+```
+
+**HTTP Status Codes I return:**
+- `200 OK` — Successful read
+- `201 Created` — Successful creation (with Location header)
+- `204 No Content` — Successful delete/update with no body
+- `400 Bad Request` — Invalid input
+- `401 Unauthorized` — Not logged in
+- `403 Forbidden` — Logged in but not permitted
+- `404 Not Found` — Resource doesn't exist
+- `500 Internal Server Error` — Unhandled server error
+
+**Pagination example:**
+```csharp
+// GET /api/posts?page=2&pageSize=10&search=dotnet&categoryId=3
+public async Task<IActionResult> GetAll(
+    int page = 1, int pageSize = 10,
+    string? search = null,
+    int? categoryId = null,
+    int? tagId = null,
+    bool includeDrafts = false)
+```
+
+---
+
+### Q22. How did you handle authorization within a controller action (not just at attribute level)?
+
+**Answer:**
+
+Some actions need fine-grained authorization beyond just "is the user logged in?" For example, only the post author OR an admin should be able to delete a post.
+
+**In `PostsController`:**
+```csharp
+[Authorize]
+[HttpDelete("{id}")]
+public async Task<IActionResult> DeletePost(int id)
+{
+    var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var isAdmin = User.IsInRole("Admin");
+
+    // Service handles the authorization check
+    await postService.DeleteAsync(id, userId, isAdmin);
+    return NoContent();
+}
+```
+
+**In `PostService.DeleteAsync()`:**
+```csharp
+var post = await db.BlogPosts.FindAsync(id)
+    ?? throw new InvalidOperationException("Post not found.");
+
+if (post.AuthorId != userId && !isAdmin)
+    throw new UnauthorizedAccessException("You cannot delete this post.");
+
+db.BlogPosts.Remove(post);
+await db.SaveChangesAsync();
+```
+
+The service throws `UnauthorizedAccessException`, which the `ErrorHandlingMiddleware` catches and returns as a `401` response.
+
+```
+Like a building: the door lock (Authorize attribute) only checks if you have a key card.
+But the receptionist (service method) checks if you're allowed in THIS specific room.
+```
+
+---
+
+## 9. DTOs & DATA MAPPING
+
+---
+
+### Q23. Why did you separate request DTOs from response DTOs?
+
+**Answer:**
+
+Request and response shapes are often different. Mixing them causes confusion and security issues.
+
+**Example — Blog Post:**
+
+`CreatePostDto` (what client sends):
+```csharp
+public string Title { get; set; }
+public string Content { get; set; }
+public string? CoverImageUrl { get; set; }
+public int CategoryId { get; set; }
+public List<string> Tags { get; set; }
+public bool IsPublished { get; set; }
+```
+
+`PostResponseDto` (what client receives):
+```csharp
+public int Id { get; set; }
+public string Title { get; set; }
+public string Slug { get; set; }        // Generated by server, not sent by client
+public string AuthorName { get; set; }  // Looked up from User table
+public string CategoryName { get; set; } // Looked up from Category table
+public List<string> Tags { get; set; }
+public DateTime CreatedAt { get; set; } // Set by server
+```
+
+The client never sends `Slug`, `AuthorName`, `CreatedAt` — those are generated/looked up server-side. The client never receives internal IDs or sensitive fields.
+
+---
+
+## 10. SECURITY PRACTICES
+
+---
+
+### Q24. What security measures did you implement in this project?
+
+**Answer:**
+
+I implemented security at multiple layers:
+
+**1. Password Hashing (BCrypt)**
+```csharp
+// Registration
+user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+
+// Login verification
+if (!BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+    throw new UnauthorizedAccessException("Invalid credentials.");
+```
+BCrypt automatically generates and stores a random salt. Even if the database is leaked, plain-text passwords are never recoverable.
+
+**2. HTML Sanitization (XSS Prevention)**
+```csharp
+post.Content = _sanitizer.Sanitize(dto.Content);
+```
+Blog posts contain HTML content (rich text editor). Without sanitization, a malicious user could inject `<script>` tags that run in other users' browsers. `HtmlSanitizer` strips dangerous tags while preserving safe formatting.
+
+**3. JWT with Short Expiry + Refresh Token**
+- Access token: 15 minutes (minimizes damage if stolen)
+- Refresh token: Stored in database (can be revoked on logout or compromise)
+
+**4. Rate Limiting**
+```csharp
+// Auth endpoints: max 10 requests/minute per IP (prevents brute force)
+options.AddFixedWindowLimiter("auth", o => {
+    o.PermitLimit = 10;
+    o.Window = TimeSpan.FromMinutes(1);
+});
+```
+Prevents brute-force attacks on login/register endpoints.
+
+**5. Email Enumeration Prevention**
+```csharp
+// Forgot password — always return success even if email doesn't exist
+public async Task ForgotPasswordAsync(string email)
+{
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
+    if (user == null) return;  // Don't reveal whether email exists
+    // Send reset email only if user exists
+}
+```
+An attacker probing which emails are registered gets no useful signal.
+
+**6. CORS Policy**
+Only trusted origins can call the API:
+```csharp
+policy.WithOrigins("http://localhost:3000", "https://thegyangaagar.in")
+```
+
+**7. HTTPS Redirection**
+All HTTP requests are redirected to HTTPS.
+
+**8. Role-Based Access Control**
+Admin-only endpoints are decorated with `[Authorize(Roles = "Admin")]`.
+
+---
+
+## 11. PERFORMANCE & CACHING
+
+---
+
+### Q25. What performance optimizations did you implement?
+
+**Answer:**
+
+**1. Response Compression (gzip + brotli)**
+```csharp
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+});
+```
+Compresses JSON responses before sending to the client. For a list of 50 blog posts, this can reduce response size by 70-80%.
+
+**2. HTTP Caching Headers (ETags)**
+```csharp
+// In PostsController.GetBySlug()
+var etag = $"\"{post.UpdatedAt.Ticks}\"";
+if (Request.Headers.IfNoneMatch == etag)
+    return StatusCode(304); // Not Modified — no data sent
+
+Response.Headers.ETag = etag;
+Response.Headers.CacheControl = "public, max-age=300, stale-while-revalidate=3600";
+```
+If a blog post hasn't changed since the client last fetched it, the server returns `304 Not Modified` with zero body — saving bandwidth.
+
+**3. Eager Loading (Prevent N+1)**
+Using `.Include()` to load related data in a single query (explained in Q14).
+
+**4. Pagination**
+```csharp
+.Skip((page - 1) * pageSize).Take(pageSize)
+```
+Never load all posts from the database. Always page results.
+
+**5. Database Connection Retry (Resilience = Performance)**
+Transient failures auto-retry instead of crashing, keeping the app available.
+
+---
+
+## 12. ERROR HANDLING
+
+---
+
+### Q26. How did you implement global error handling?
+
+**Answer:**
+
+I used a custom `ErrorHandlingMiddleware` that wraps the entire request pipeline. This is the **single place** where all exceptions are caught and converted to JSON responses.
+
+**Why middleware instead of try-catch everywhere?**
+Without middleware, every controller action would need its own try-catch. That's code duplication and easy to forget. With middleware:
+- Zero try-catch blocks needed in controllers or services
+- Consistent error format across all endpoints: `{ "error": "message" }`
+- Centralized logging
+
+**Exception hierarchy handled:**
+```
+UnauthorizedAccessException → 401 (business rule violation, e.g. "not your post")
+InvalidOperationException   → 400 (bad request, e.g. "post not found")
+Exception (any other)       → 500 (unexpected — logged with full stack trace)
+```
+
+**Services throw typed exceptions intentionally:**
+```csharp
+// PostService — throws business-meaning exceptions
+var post = await db.BlogPosts.FindAsync(id)
+    ?? throw new InvalidOperationException("Post not found.");
+
+if (post.AuthorId != userId && !isAdmin)
+    throw new UnauthorizedAccessException("You cannot delete this post.");
+```
+
+The middleware catches these and maps them to the correct HTTP status codes automatically.
+
+```
+Like a catch-all safety net under a circus trapeze act:
+Each performer (service) can throw without worrying about landing —
+the net (middleware) catches everything and handles it gracefully.
+```
+
+---
+
+## 13. GENERAL .NET / C# QUESTIONS
+
+---
+
+### Q27. What is the difference between `IEnumerable`, `IQueryable`, and `List`?
+
+**Answer:**
+
+| Type | Where executed | When to use |
+|------|---------------|-------------|
+| `IQueryable<T>` | On the database (SQL) | EF Core queries before `.ToListAsync()` |
+| `IEnumerable<T>` | In memory (C#) | After data is loaded, for in-memory iteration |
+| `List<T>` | In memory | When you need a concrete collection |
+
+**In my project:**
+```csharp
+// IQueryable — still a SQL query being built
+var query = db.BlogPosts
+    .Where(p => p.IsPublished)
+    .Include(p => p.Author);
+
+// Adding filters still modifies the SQL — not executed yet
+if (search != null)
+    query = query.Where(p => p.Title.Contains(search));
+
+// .ToListAsync() — NOW it hits the database
+var posts = await query.ToListAsync();  // Returns List<BlogPost>
+```
+
+**Why this matters:**
+If I called `.ToList()` after the first `Where`, all posts would load into memory and the search filter would run in C# — much slower for large datasets. By keeping it `IQueryable` until the end, EF Core generates one optimized SQL with all filters.
+
+---
+
+### Q28. What is `async`/`await` and why did you use it everywhere?
+
+**Answer:**
+
+`async`/`await` is C#'s way of writing asynchronous code that looks synchronous. When a method does I/O (database call, HTTP call, file read), the thread is released to handle other requests while waiting for the I/O to complete.
+
+```
+Without async: Thread is like a waiter who stands at the kitchen door
+waiting for the order to be cooked — blocking. Can't serve other tables.
+
+With async: Waiter places the order, goes and serves other tables.
+When food is ready, waiter is notified and delivers it — non-blocking.
+```
+
+**In my project — every database call is async:**
+```csharp
+public async Task<PostResponseDto> GetBySlugAsync(string slug)
+{
+    var post = await db.BlogPosts          // Thread is released while SQL runs
+        .Include(p => p.Author)
+        .FirstOrDefaultAsync(p => p.Slug == slug);
+    return Map(post);
+}
+```
+
+**Why it matters for a web API:**
+ASP.NET Core has a thread pool. If all threads are blocked waiting for DB responses, new requests queue up and the API appears slow/unresponsive. With `async`, the same threads handle many more concurrent requests.
+
+---
+
+### Q29. What are C# Records and did you use them?
+
+**Answer:**
+
+Records are immutable reference types introduced in C# 9. They are perfect for DTOs because:
+1. They are value-based (equality by content, not reference)
+2. They are immutable by default (safe to share)
+3. Less boilerplate than classes
+
+In my project, DTOs could be implemented as records. For example:
+```csharp
+public record CreatePostDto(
+    string Title,
+    string Content,
+    int CategoryId,
+    List<string> Tags,
+    bool IsPublished
+);
+```
+
+Currently my project uses classes with init-only setters for DTOs, which achieves similar immutability. Both approaches are valid for interview discussion.
+
+---
+
+### Q30. Explain the `??` (null-coalescing) and `?.` (null-conditional) operators with examples from your project.
+
+**Answer:**
+
+**`??` — Null-coalescing operator:** Returns the right value if the left is null.
+```csharp
+// In PostService.Map()
+AuthorName = p.Author?.UserName ?? "Unknown"
+// If Author is null, use "Unknown" instead of crashing
+```
+
+**`?.` — Null-conditional operator:** Safely accesses a member only if the object is not null.
+```csharp
+// In PostService
+var authorName = p.Author?.UserName;
+// If Author is null, authorName = null (no NullReferenceException)
+```
+
+**`??=` — Null-coalescing assignment:**
+```csharp
+list ??= new List<string>();
+// Assign only if list is null
+```
+
+**Combined pattern in my project:**
+```csharp
+AuthorName = p.Author?.UserName ?? "Unknown",
+CategoryName = p.Category?.Name ?? "Uncategorized",
+```
+This safely handles cases where EF Core didn't load the related entity (navigation property is null).
+
+---
+
+### Q31. What is CORS and why did you configure it?
+
+**Answer:**
+
+CORS (Cross-Origin Resource Sharing) is a browser security feature. Browsers block JavaScript from making API calls to a different domain than the page it is on — unless the server explicitly allows it.
+
+```
+Imagine you're at restaurant A (localhost:3000 — React frontend).
+You want to order food from restaurant B (localhost:5000 — API).
+By default, restaurant B refuses to serve you because you're not at their tables.
+CORS is the agreement that says "customers from restaurant A are welcome here."
+```
+
+**In my project:**
+```csharp
+policy.WithOrigins(
+    "http://localhost:3000",         // Local development
+    "https://thegyangaagar.in",      // Production frontend
+    "https://www.thegyangaagar.in"   // Production with www
+)
+.AllowAnyHeader()
+.AllowAnyMethod()
+```
+
+Without this, the React frontend deployed at `thegyangaagar.in` could not call the API — the browser would block every request with a CORS error.
+
+---
+
+### Q32. What is the Slug and how did you generate it?
+
+**Answer:**
+
+A Slug is a URL-friendly version of a title — lowercase, hyphens instead of spaces, no special characters.
+
+Example: `"10 Tips for Better .NET Code!"` → `"10-tips-for-better-net-code"`
+
+**Why slugs?**
+- Better SEO than `/posts/42` — Google can read `/posts/10-tips-for-better-net-code`
+- Human-readable URLs
+- Stable even if the ID changes
+
+**In my project (`PostService`):**
+```csharp
+private static readonly SlugHelper _slugger = new();
+
+private async Task<string> GenerateUniqueSlugAsync(string title)
+{
+    var slug = _slugger.GenerateSlug(title);  // "my post title" → "my-post-title"
+    var exists = await db.BlogPosts.AnyAsync(p => p.Slug == slug);
+
+    if (!exists) return slug;
+
+    // If slug is taken, append a number: "my-post-title-2", "my-post-title-3"...
+    var i = 2;
+    while (await db.BlogPosts.AnyAsync(p => p.Slug == $"{slug}-{i}"))
+        i++;
+    return $"{slug}-{i}";
+}
+```
+
+---
+
+### Q33. How did you implement the Comment moderation workflow?
+
+**Answer:**
+
+Comments in a public blog can be abusive or spammy. I implemented an approval workflow:
+
+1. User submits comment → stored with `IsApproved = false`
+2. Comment does NOT appear on the post (public API filters: `.Where(c => c.IsApproved)`)
+3. Admin sees pending comments at `GET /api/comments/pending`
+4. Admin calls `PATCH /api/comments/{id}/approve`
+5. Comment is now visible to everyone
+
+```csharp
+// Public endpoint — only approved
+public async Task<List<CommentDto>> GetByPostAsync(int postId)
+    => await db.Comments
+        .Where(c => c.PostId == postId && c.IsApproved)
+        ...
+
+// Admin endpoint — pending only
+public async Task<List<CommentDto>> GetPendingAsync()
+    => await db.Comments
+        .Where(c => !c.IsApproved)
+        ...
+```
+
+```
+Like a newspaper's letters-to-the-editor section:
+Readers send letters (comments), editors review them (admin approval),
+and only approved ones get printed (IsApproved = true).
+```
+
+---
+
+### Q34. How did you handle image uploads?
+
+**Answer:**
+
+Storing images on the server's local disk is bad for scalability — if the server restarts or scales horizontally, images are lost or unavailable on other instances. I used **Cloudinary** — a cloud-based image management service.
+
+**Upload flow:**
+```
+Client → POST /api/media/upload (sends image file)
+       → MediaService.UploadAsync()
+       → Cloudinary API (stores image, returns URL + PublicId)
+       → Store URL + PublicId in Media table (AppDbContext)
+       → Return URL to client
+```
+
+**Delete flow:**
+```
+Admin → DELETE /api/media/{id}
+      → MediaService.DeleteAsync()
+      → Find Media record in DB (get PublicId)
+      → Delete from Cloudinary using PublicId
+      → Delete Media record from DB
+```
+
+```csharp
+// MediaService — Upload
+var uploadParams = new ImageUploadParams { File = new FileDescription(file.FileName, stream) };
+var result = await cloudinary.UploadAsync(uploadParams);
+
+var media = new Media {
+    Url = result.SecureUrl.ToString(),
+    PublicId = result.PublicId,
+    UploadedById = userId
+};
+await db.Media.AddAsync(media);
+await db.SaveChangesAsync();
+```
+
+---
+
+### Q35. If you had to add unit tests to this project, how would you approach it?
+
+**Answer:**
+
+My project's architecture is already designed for testability — services depend on interfaces, not concrete classes. This makes mocking easy.
+
+**Example — Testing PostService:**
+```csharp
+// Arrange
+var mockDb = new Mock<AppDbContext>();
+var postService = new PostService(mockDb.Object);
+
+// Or use InMemory EF Core database
+var options = new DbContextOptionsBuilder<AppDbContext>()
+    .UseInMemoryDatabase("TestDb")
+    .Build();
+var db = new AppDbContext(options);
+var postService = new PostService(db);
+
+// Act
+var result = await postService.GetBySlugAsync("my-test-post");
+
+// Assert
+Assert.NotNull(result);
+Assert.Equal("my-test-post", result.Slug);
+```
+
+**What I would test:**
+1. `PostService.CreateAsync()` — verify slug generation, tag creation, sanitization
+2. `AuthService.LoginAsync()` — wrong password throws, correct password returns tokens
+3. `ErrorHandlingMiddleware` — exceptions produce correct status codes
+4. Rate limiting — 11th request within a minute returns 429
+
+The DI-based architecture means controllers can be tested with mocked services, and services can be tested with in-memory databases.
+
+---
+
+## QUICK REFERENCE — PATTERNS & WHERE USED
+
+| Concept / Pattern | Where in Project | File |
+|---|---|---|
+| Encapsulation | JwtHelper hides token logic | `Helpers/JwtHelper.cs` |
+| Abstraction | Service interfaces | `Services/I*.cs` |
+| Inheritance | Services : Interfaces, Controllers : ControllerBase | All service/controller files |
+| Polymorphism | IEmailService swappable implementations | `Services/EmailService.cs` |
+| SOLID — SRP | Each class has one job | All services, middleware |
+| SOLID — OCP | IEmailService open for extension | `Services/IEmailService.cs` |
+| SOLID — DIP | Controllers depend on interfaces | All controllers |
+| DI — Scoped | DbContext, all Services | `Program.cs` |
+| DI — Singleton | JwtHelper | `Program.cs` |
+| Service Layer | Controllers → Services → DbContext | All controllers + services |
+| DTO Pattern | CreatePostDto, PostResponseDto, etc. | `DTOs/` folder |
+| Factory Pattern | JwtHelper.GenerateAccessToken() | `Helpers/JwtHelper.cs` |
+| Strategy Pattern | IEmailService | `Services/IEmailService.cs` |
+| Repository (implicit) | EF Core DbContext + DbSets | `Data/AppDbContext.cs` |
+| Middleware | ErrorHandling, ApiRobots | `Middleware/` folder |
+| JWT Auth | Access + Refresh token flow | `Helpers/JwtHelper.cs`, `Services/AuthService.cs` |
+| Role-Based Auth | [Authorize(Roles="Admin")] | All controllers |
+| Rate Limiting | 10/min auth, 100/min general | `Program.cs` |
+| HTML Sanitization | Post content XSS prevention | `Services/PostService.cs` |
+| Slug Generation | Auto-generated from post title | `Services/PostService.cs` |
+| Eager Loading | .Include() prevents N+1 | `Services/PostService.cs` |
+| Pagination | .Skip().Take() on posts | `Services/PostService.cs` |
+| HTTP Caching | ETag headers on post by slug | `Controllers/PostsController.cs` |
+| Response Compression | gzip + brotli | `Program.cs` |
+| DB Retry Policy | EnableRetryOnFailure (5 retries) | `Program.cs` |
+| Email Enumeration Prevention | ForgotPassword always returns success | `Services/AuthService.cs` |
+| BCrypt Hashing | Password storage | `Services/AuthService.cs` |
+| Cloud Storage | Cloudinary image uploads | `Services/MediaService.cs` |
+| Comment Moderation | IsApproved workflow | `Services/CommentService.cs` |
+
+---
+
+*Good luck with your interview! You have built a production-grade ASP.NET Core API
+with proper OOP, SOLID principles, security, and performance — explain it with confidence.*
