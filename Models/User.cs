@@ -9,6 +9,8 @@ public class User
     public string Role { get; set; } = "User";
     public string? RefreshToken { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
+    public string? Bio { get; set; }
+    public string? ProfilePictureUrl { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<BlogPost> BlogPosts { get; set; } = [];

@@ -54,4 +54,22 @@ public class AuthController(IAuthService authService) : ControllerBase
         var role = User.FindFirstValue(ClaimTypes.Role);
         return Ok(new { userId, email, role });
     }
+
+    [Authorize]
+    [HttpGet("profile")]
+    public async Task<IActionResult> GetProfile()
+    {
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var profile = await authService.GetProfileAsync(userId);
+        return Ok(profile);
+    }
+
+    [Authorize]
+    [HttpPut("profile")]
+    public async Task<IActionResult> UpdateProfile(UpdateProfileDto dto)
+    {
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var profile = await authService.UpdateProfileAsync(userId, dto);
+        return Ok(profile);
+    }
 }

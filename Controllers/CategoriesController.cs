@@ -12,7 +12,6 @@ public class CategoriesController(ICategoryService categoryService) : Controller
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
-        Response.Headers.CacheControl = "public, max-age=300, stale-while-revalidate=3600";
         return Ok(await categoryService.GetAllAsync());
     }
 

@@ -11,6 +11,7 @@ public class PostResponseDto
     public bool IsPublished { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public int AuthorId { get; set; }
     public string AuthorName { get; set; } = string.Empty;
     public string? CategoryName { get; set; }
     public List<string> Tags { get; set; } = [];

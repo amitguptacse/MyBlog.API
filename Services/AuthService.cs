@@ -87,6 +87,49 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
         await db.SaveChangesAsync();
     }
 
+    public async Task<ProfileResponseDto> GetProfileAsync(int userId)
+    {
+        var user = await db.Users.FindAsync(userId)
+            ?? throw new KeyNotFoundException("User not found.");
+        return MapProfile(user);
+    }
+
+    public async Task<ProfileResponseDto> UpdateProfileAsync(int userId, UpdateProfileDto dto)
+    {
+        var user = await db.Users.FindAsync(userId)
+            ?? throw new KeyNotFoundException("User not found.");
+
+        if (!string.IsNullOrWhiteSpace(dto.Username))
+            user.Username = dto.Username.Trim();
+
+        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email != user.Email)
+        {
+            if (await db.Users.AnyAsync(u => u.Email == dto.Email && u.Id != userId))
+                throw new InvalidOperationException("Email already in use.");
+            user.Email = dto.Email.Trim();
+        }
+
+        if (dto.Bio is not null)
+            user.Bio = dto.Bio.Trim();
+
+        if (dto.ProfilePictureUrl is not null)
+            user.ProfilePictureUrl = dto.ProfilePictureUrl;
+
+        await db.SaveChangesAsync();
+        return MapProfile(user);
+    }
+
+    private static ProfileResponseDto MapProfile(User user) => new()
+    {
+        Id = user.Id,
+        Username = user.Username,
+        Email = user.Email,
+        Bio = user.Bio,
+        ProfilePictureUrl = user.ProfilePictureUrl,
+        Role = user.Role,
+        CreatedAt = user.CreatedAt,
+    };
+
     private async Task<AuthResponseDto> IssueTokens(User user)
     {
         user.RefreshToken = jwt.GenerateRefreshToken();

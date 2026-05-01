@@ -162,6 +162,7 @@ public class PostService(AppDbContext db) : IPostService
         IsPublished = p.IsPublished,
         CreatedAt = p.CreatedAt,
         UpdatedAt = p.UpdatedAt,
+        AuthorId = p.Author?.Id ?? 0,
         AuthorName = p.Author?.Username ?? string.Empty,
         CategoryName = p.Category?.Name,
         Tags = p.Tags.Select(t => t.Name).ToList()
