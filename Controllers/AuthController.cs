@@ -38,6 +38,13 @@ public class AuthController(IAuthService authService) : ControllerBase
         return Ok(new { message = "If the email exists, a reset link has been sent." });
     }
 
+    [HttpPost("verify-email")]
+    public async Task<IActionResult> VerifyEmail(VerifyEmailDto dto)
+    {
+        var result = await authService.VerifyEmailAsync(dto);
+        return Ok(result);
+    }
+
     [HttpPost("reset-password")]
     public async Task<IActionResult> ResetPassword(ResetPasswordDto dto)
     {

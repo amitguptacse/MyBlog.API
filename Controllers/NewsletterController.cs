@@ -30,4 +30,12 @@ public class NewsletterController(INewsletterService newsletterService) : Contro
         await newsletterService.UnsubscribeAsync(dto.Email);
         return Ok(new { message = "Unsubscribed successfully." });
     }
+
+    [Authorize(Roles = "Admin")]
+    [HttpPost("broadcast")]
+    public async Task<IActionResult> Broadcast(BroadcastDto dto)
+    {
+        await newsletterService.BroadcastAsync(dto.Subject, dto.BodyHtml);
+        return Ok(new { message = "Broadcast sent to all active subscribers." });
+    }
 }

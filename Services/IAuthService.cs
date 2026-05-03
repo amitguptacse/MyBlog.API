@@ -9,6 +9,7 @@ public interface IAuthService
     Task<AuthResponseDto> RefreshTokenAsync(string refreshToken);
     Task ForgotPasswordAsync(string email);
     Task ResetPasswordAsync(string email, string token, string newPassword);
+    Task<AuthResponseDto> VerifyEmailAsync(VerifyEmailDto dto);
     Task<ProfileResponseDto> GetProfileAsync(int userId);
     Task<ProfileResponseDto> UpdateProfileAsync(int userId, UpdateProfileDto dto);
 }

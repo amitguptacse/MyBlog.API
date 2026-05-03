@@ -13,6 +13,10 @@ public class User
     public string? ProfilePictureUrl { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    public bool IsEmailVerified { get; set; } = false;
+    public string? EmailVerificationOtp { get; set; }
+    public DateTime? EmailVerificationOtpExpiry { get; set; }
+
     public ICollection<BlogPost> BlogPosts { get; set; } = [];
     public ICollection<Comment> Comments { get; set; } = [];
 }

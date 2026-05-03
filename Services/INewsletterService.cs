@@ -7,4 +7,5 @@ public interface INewsletterService
     Task SubscribeAsync(string email);
     Task UnsubscribeAsync(string email);
     Task<List<Newsletter>> GetAllAsync();
+    Task BroadcastAsync(string subject, string bodyHtml);
 }

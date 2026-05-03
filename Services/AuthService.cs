@@ -6,24 +6,60 @@ using MyBlog.API.Models;
 
 namespace MyBlog.API.Services;
 
-public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : IAuthService
+public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email, IConfiguration config) : IAuthService
 {
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto dto)
     {
         if (await db.Users.AnyAsync(u => u.Email == dto.Email))
             throw new InvalidOperationException("Email already in use.");
 
+        var otp = GenerateOtp();
         var user = new User
         {
-            Username = dto.Username,
-            Email = dto.Email,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password)
+            Username             = dto.Username,
+            Email                = dto.Email,
+            PasswordHash         = BCrypt.Net.BCrypt.HashPassword(dto.Password),
+            IsEmailVerified      = false,
+            EmailVerificationOtp = otp,
+            EmailVerificationOtpExpiry = DateTime.UtcNow.AddMinutes(10),
         };
 
         db.Users.Add(user);
         await db.SaveChangesAsync();
 
-        return BuildResponse(user);
+        await email.SendAsync(
+            toEmail:  user.Email,
+            toName:   user.Username,
+            subject:  "Verify your theGyanGaagar email",
+            htmlBody: EmailTemplates.EmailVerification(user.Username, otp));
+
+        return new AuthResponseDto
+        {
+            Id                        = user.Id,
+            Email                     = user.Email,
+            Username                  = user.Username,
+            Role                      = user.Role,
+            RequiresEmailVerification = true,
+        };
+    }
+
+    public async Task<AuthResponseDto> VerifyEmailAsync(VerifyEmailDto dto)
+    {
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Email == dto.Email)
+            ?? throw new InvalidOperationException("Account not found.");
+
+        if (user.IsEmailVerified)
+            return await IssueTokens(user);
+
+        if (user.EmailVerificationOtp != dto.Otp || user.EmailVerificationOtpExpiry < DateTime.UtcNow)
+            throw new InvalidOperationException("Invalid or expired verification code.");
+
+        user.IsEmailVerified            = true;
+        user.EmailVerificationOtp       = null;
+        user.EmailVerificationOtpExpiry = null;
+        await db.SaveChangesAsync();
+
+        return await IssueTokens(user);
     }
 
     public async Task<AuthResponseDto> LoginAsync(LoginDto dto)
@@ -33,6 +69,30 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
 
         if (!BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
             throw new UnauthorizedAccessException("Invalid credentials.");
+
+        if (!user.IsEmailVerified)
+        {
+            // Resend a fresh OTP so they can complete verification
+            var otp = GenerateOtp();
+            user.EmailVerificationOtp       = otp;
+            user.EmailVerificationOtpExpiry = DateTime.UtcNow.AddMinutes(10);
+            await db.SaveChangesAsync();
+
+            await email.SendAsync(
+                toEmail:  user.Email,
+                toName:   user.Username,
+                subject:  "Verify your theGyanGaagar email",
+                htmlBody: EmailTemplates.EmailVerification(user.Username, otp));
+
+            return new AuthResponseDto
+            {
+                Id                        = user.Id,
+                Email                     = user.Email,
+                Username                  = user.Username,
+                Role                      = user.Role,
+                RequiresEmailVerification = true,
+            };
+        }
 
         return await IssueTokens(user);
     }
@@ -49,28 +109,20 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
     public async Task ForgotPasswordAsync(string emailAddress)
     {
         var user = await db.Users.FirstOrDefaultAsync(u => u.Email == emailAddress);
+        if (user is null) return; // prevent email enumeration
 
-        // Always return success to prevent email enumeration
-        if (user is null) return;
-
-        // Generate a secure reset token (reuse refresh token slot)
-        user.RefreshToken = jwt.GenerateRefreshToken();
+        user.RefreshToken       = jwt.GenerateRefreshToken();
         user.RefreshTokenExpiry = DateTime.UtcNow.AddHours(1);
         await db.SaveChangesAsync();
 
-        var resetLink = $"http://localhost:3000/auth/reset-password?token={Uri.EscapeDataString(user.RefreshToken)}&email={Uri.EscapeDataString(user.Email)}";
+        var baseUrl   = config["App:BaseUrl"] ?? throw new InvalidOperationException("App:BaseUrl is not configured.");
+        var resetLink = $"{baseUrl}/auth/reset-password?token={Uri.EscapeDataString(user.RefreshToken)}&email={Uri.EscapeDataString(user.Email)}";
 
         await email.SendAsync(
-            toEmail: user.Email,
-            toName: user.Username,
-            subject: "Reset your MyBlog password",
-            htmlBody: $"""
-                <h2>Password Reset</h2>
-                <p>Hi {user.Username},</p>
-                <p>Click the link below to reset your password. This link expires in 1 hour.</p>
-                <p><a href="{resetLink}">Reset Password</a></p>
-                <p>If you did not request this, ignore this email.</p>
-                """);
+            toEmail:  user.Email,
+            toName:   user.Username,
+            subject:  "Reset your theGyanGaagar password",
+            htmlBody: EmailTemplates.PasswordReset(user.Username, resetLink));
     }
 
     public async Task ResetPasswordAsync(string emailAddress, string token, string newPassword)
@@ -81,8 +133,8 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
             u.RefreshTokenExpiry > DateTime.UtcNow)
             ?? throw new InvalidOperationException("Invalid or expired reset link. Please request a new one.");
 
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
-        user.RefreshToken = null;
+        user.PasswordHash       = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        user.RefreshToken       = null;
         user.RefreshTokenExpiry = null;
         await db.SaveChangesAsync();
     }
@@ -121,18 +173,18 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
 
     private static ProfileResponseDto MapProfile(User user) => new()
     {
-        Id = user.Id,
-        Username = user.Username,
-        Email = user.Email,
-        Bio = user.Bio,
+        Id                = user.Id,
+        Username          = user.Username,
+        Email             = user.Email,
+        Bio               = user.Bio,
         ProfilePictureUrl = user.ProfilePictureUrl,
-        Role = user.Role,
-        CreatedAt = user.CreatedAt,
+        Role              = user.Role,
+        CreatedAt         = user.CreatedAt,
     };
 
     private async Task<AuthResponseDto> IssueTokens(User user)
     {
-        user.RefreshToken = jwt.GenerateRefreshToken();
+        user.RefreshToken       = jwt.GenerateRefreshToken();
         user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
         await db.SaveChangesAsync();
         return BuildResponse(user);
@@ -140,11 +192,14 @@ public class AuthService(AppDbContext db, JwtHelper jwt, IEmailService email) : 
 
     private AuthResponseDto BuildResponse(User user) => new()
     {
-        Id = user.Id,
-        AccessToken = jwt.GenerateAccessToken(user),
+        Id           = user.Id,
+        AccessToken  = jwt.GenerateAccessToken(user),
         RefreshToken = user.RefreshToken ?? string.Empty,
-        Email = user.Email,
-        Username = user.Username,
-        Role = user.Role
+        Email        = user.Email,
+        Username     = user.Username,
+        Role         = user.Role,
     };
+
+    private static string GenerateOtp() =>
+        Random.Shared.Next(100_000, 999_999).ToString();
 }

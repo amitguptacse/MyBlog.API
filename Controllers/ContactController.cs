@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using MyBlog.API.Data;
 using MyBlog.API.DTOs;
+using MyBlog.API.Helpers;
 using MyBlog.API.Models;
 using MyBlog.API.Services;
 
@@ -32,12 +33,7 @@ public class ContactController(AppDbContext db, IEmailService emailService, ICon
             var ownerEmail = config["Contact:OwnerEmail"] ?? config["SendGrid:FromEmail"];
             if (!string.IsNullOrEmpty(ownerEmail))
             {
-                var html = $"""
-                    <p><strong>From:</strong> {dto.Name} &lt;{dto.Email}&gt;</p>
-                    <p><strong>Subject:</strong> {dto.Subject}</p>
-                    <hr/>
-                    <p>{dto.Message.Replace("\n", "<br/>")}</p>
-                    """;
+                var html = EmailTemplates.ContactNotification(dto.Name, dto.Email, dto.Subject, dto.Message);
                 await emailService.SendAsync(ownerEmail, "Blog Owner", $"[theGyanGaagar Contact] {dto.Subject}", html);
             }
         }
