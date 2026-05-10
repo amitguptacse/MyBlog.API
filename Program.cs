@@ -184,7 +184,10 @@ app.MapControllers();
 
 // Auth endpoints get stricter rate limit
 app.MapGroup("api/auth").RequireRateLimiting("auth");
-
+// HEAD request bhi handle karta hai 10may for uptime robot 
+app.MapMethods("/health", 
+    new[] { "GET", "HEAD" }, 
+    () => Results.Ok("OK"));
 try
 {
     Log.Information("Starting MyBlog API");
