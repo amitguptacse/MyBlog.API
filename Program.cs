@@ -176,9 +176,23 @@ app.UseResponseCompression();
 app.UseRateLimiter();
 app.UseCors();
 // HEAD request bhi handle karta hai 10may for uptime robot 
-app.MapMethods("/health", 
-    new[] { "GET", "HEAD" }, 
-    () => Results.Ok("OK"));
+// /health endpoint mein DB ping bhi karo:
+
+app.MapMethods("/health",
+    new[] { "GET", "HEAD" },
+    async (AppDbContext db) =>
+    {
+        try
+        {
+            // DB ko jagaaye rakho
+            await db.Database.ExecuteSqlRawAsync("SELECT 1");
+            return Results.Ok("OK");
+        }
+        catch
+        {
+            return Results.Ok("OK"); // App toh alive hai
+        }
+    });
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
